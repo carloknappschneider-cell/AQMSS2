@@ -1,0 +1,323 @@
+
+
+#-------------------------------------------------------------------------------
+###Library
+library(dplyr)
+library(broom)
+library(ggplot2)
+library(modelsummary)
+library(marginaleffects)
+library(readstata13)
+
+#-------------------------------------------------------------------------------
+###1 Part 1: In-Class (Corruption and Wealth)
+##1.1 Setup and data exploration
+#a)
+df = read.dta13("C:/Users/carlo/OneDrive/Dokumente/AQMSS2/assignment 4/corruption.dta")
+
+
+#b)
+df = df %>% filter(!is.na(ti_cpi) & !is.na(undp_gdp))
+nrow(df)
+
+#c)
+summary(df$ti_cpi)
+sd(df$ti_cpi)
+
+summary(df$undp_gdp)
+sd(df$undp_gdp)
+
+#-------------------------------------------------------------------------------
+##1.2 Exploratory visualization
+#a)
+ggplot(df, aes(x = undp_gdp, y = ti_cpi)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(x = "GDP per capita (PPP)", y = "Corruption Perceptions Index")
+
+#b)
+#The relationship is non-linear and positive. 
+
+#c)
+ggplot(df, aes(x = log(undp_gdp), y = ti_cpi)) +
+  geom_point() +
+  geom_smooth(method = "lm") +
+  labs(x = "log(GDP per capita)", y = "Corruption Perceptions Index")
+
+#-------------------------------------------------------------------------------
+##1.3 Bivariate regression
+#a)
+m1 = lm(ti_cpi ~ undp_gdp, data = df)
+
+#b)
+summary(m1)
+
+#c)
+q25 = quantile(df$undp_gdp, 0.25)
+q75 = quantile(df$undp_gdp, 0.75)
+c(q25, q75)
+predictions(m1, newdata = datagrid(undp_gdp = c(q25, q75)))
+
+
+#-------------------------------------------------------------------------------
+##1.4 Non-linear specifications
+#a)
+m2 = lm(ti_cpi ~ log(undp_gdp), data = df)
+tidy(m2)
+
+#b)
+coef(m2)["log(undp_gdp)"] * log(2)
+
+plot_predictions(m2, condition = "undp_gdp")
+
+#c)
+m3 = lm(ti_cpi ~ undp_gdp + I(undp_gdp^2), data = df)
+tidy(m3)
+
+plot_predictions(m3, condition = "undp_gdp")
+
+#d)
+r2 = c(
+  "Level-Level" = summary(m1)$r.squared,
+  "Level-Log" = summary(m2)$r.squared,
+  "Quadratic" = summary(m3)$r.squared)
+r2
+
+#-------------------------------------------------------------------------------
+##1.5 Marginal effects
+#a)
+avg_slopes(m2, variables = "undp_gdp")
+
+
+#b)
+#The AME differs from the raw coefficient on log(undp_gdp) because the marginal effect of GDP 
+#in a level-log model depends on the level of GDP
+
+#c)
+slopes(m3, variables = "undp_gdp",
+       newdata = datagrid(undp_gdp = c(2000, 10000, 30000)))
+
+#-------------------------------------------------------------------------------
+##1.6 Prediction plots
+#a)
+p1 = plot_predictions(m2, condition = "undp_gdp")
+p1
+ggsave("pred_plot_m2.png", p1, width = 6, height = 4)
+
+#b)
+p2 = plot_predictions(m3, condition = "undp_gdp")
+p2
+ggsave("pred_plot_m3.png", p2, width = 6, height = 4)
+
+#c)
+#In both mmodels  corruption decreases sharply with initial increases in GDP and then levels 
+#off at higher income levels.
+
+#-------------------------------------------------------------------------------
+##1.7 Residual diagnostics
+#a)
+m1_aug = augment(m1)
+ggplot(m1_aug, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Fitted values", y = "Residuals", title = "Residuals vs Fitted: Level-Level (m1)")
+
+#b)
+m2_aug = augment(m2)
+ggplot(m2_aug, aes(x = .fitted, y = .resid)) +
+  geom_point() +
+  geom_hline(yintercept = 0, linetype = "dashed") +
+  labs(x = "Fitted values", y = "Residuals", title = "Residuals vs Fitted: Level-Log (m2)")
+
+#c)
+n = nrow(df)
+threshold = 4 / n
+cooks_d = cooks.distance(m2)
+influential = which(cooks_d > threshold)
+df$cname[influential]
+plot(m2, which = 4)
+
+#-------------------------------------------------------------------------------
+#1.8 Publication-quality table
+#a)
+modelsummary(
+  list("Level-Level" = m1, "Level-Log" = m2, "Quadratic" = m3),
+  vcov = "robust",
+  stars = TRUE,
+  gof_map = c("r.squared", "nobs"),
+  output = "markdown")
+
+#b)
+#m2 has the highest R2 and produces the best residual diagnostics.
+
+
+
+  
+#-------------------------------------------------------------------------------
+###2 Part 2: Take-Home (Wealth and Infant Mortality)
+##2.1 Data exploration
+#a)
+df = read.dta13("C:/Users/carlo/OneDrive/Dokumente/AQMSS2/assignment 4/infantmortality.dta")
+summary(df)
+
+n_countries <- df %>% summarise(n = n_distinct(country)) %>% pull(n)
+n_countries
+
+#101 countries
+
+#b)
+p_hist_infant <- ggplot(df, aes(x = infant)) +
+  geom_histogram(bins = 30) +
+  labs(title = "Histogram: Infant mortality", x = "Infant mortality (per 1,000)", y = "Count") +
+  theme_minimal()
+p_hist_infant
+
+p_hist_income <- ggplot(df, aes(x = income)) +
+  geom_histogram(bins = 30) +
+  labs(title = "Histogram: Income", x = "Per-capita income (USD)", y = "Count") +
+  theme_minimal()
+p_hist_income
+
+#Both histograms are right-skewed
+
+#c)
+scatter <- ggplot(df, aes(x = income, y = infant, color = region)) +
+  geom_point(alpha = 0.8, size = 2) +
+  labs(title = "Infant mortality vs Income", x = "Per-capita income (USD)", y = "Infant mortality (per 1,000)") +
+  theme_minimal()
+scatter
+
+#Countries with a very low per-capita income have on average a higher infant mortality.
+
+#b)
+df_log <- df %>% filter(income > 0, infant > 0)
+
+scatter_log <- ggplot(df_log, aes(x = log(income), y = log(infant), color = region)) +
+  geom_point(alpha = 0.8, size = 2) +
+  labs(
+    title = "Log: Infant mortality vs Income",
+    x = "log(income)",
+    y = "log(infant mortality)"
+  ) +
+  theme_minimal()
+scatter_log
+
+#Yes the log-log relationship looks more linear.
+
+
+##2.2 Comparing specifications
+#a)
+m1 = lm(infant ~ income, data = df)
+summary(m1)
+
+#b)
+m2 = lm(log(infant) ~ log(income), data = df)
+summary(m2)
+
+#c)
+#m1: A $1,000 increase in per-capita income is associated with about 21 fewer infant deaths per 1,000 live births.
+#m2: A 10% increase in income is associated with roughly a 5.1% decrease in infant mortality.
+
+#d)
+
+par(mfrow = c(1, 2))
+plot(m1, which = 1)   
+plot(m2, which = 1)  
+par(mfrow = c(1, 1))
+
+#The log specification fits better because its residuals are more randomly scattered around zero with a more constant variance, 
+#the other model shows clear curvature and a funnel shape indicating heteroskedasticity.
+
+##2.3 Multiple regression with controls
+#a)
+m3 = lm(log(infant) ~ log(income) + region + oil, data = df)
+summary(m3)
+
+#b)
+#A 1% increase in income is associated with a 0.34% decrease in infant mortality, holding region and oil-exporter status constant. 
+#Compared to the baseline log model, the income effect changes only slightly, suggesting that the negative relationship between income and infant mortality is robust.
+
+#c)
+#African countries have significantly higher infant mortality than countries in the Americas, Asia, and Europe.
+
+#d)
+avg_slopes(m3)
+#A $1,000 increase in income is associated with about a 1.6 decrease in infant deaths per 1,000 births on average.
+
+##2.4 Interaction: oil status and income
+#a)
+m4 = lm(log(infant) ~ log(income) * oil + region, data = df)
+summary(m4)
+
+#b)
+avg_slopes(m4, variables = "income", by = "oil")
+
+#c)
+#For non-oil countries, higher income significantly reduces infant mortality. However, this negative effect is much weaker (and even slightly positive in the AMEs) for oil-exporting countries. 
+#This suggests that income gains in oil economies may not translate into improved health outcomes.
+
+#d)
+p_me <-plot_slopes(m4, variables = "income", condition = "oil")
+p_me
+ggsave("marginal_effect_oil_income.png", p_me, width = 7, height = 5)
+
+##2.5 Predicted values for specific scenarios
+#a)
+predictions(m3,
+            newdata = datagrid(
+              income = c(1000, 20000, 10000),
+              region = c("Africa", "Europe", "Americas"),
+              oil = c("no", "no", "yes")))
+
+#b)
+#The predicted infant mortality rate for a non-oil African country with income $1,000 is approximately 67 deaths per 1,000 births. 
+#The non-oil European country with income $20,000 is predicted to have about 9 deaths per 1,000 births. 
+#The oil-exporting country in the Americas with income $10,000 has a predicted rate of roughly 34. 
+#These values seem plausible and consistent with global development patterns. 
+#The gap between the African and European scenarios is ca. 58 deaths per 1,000 births, indicating a substantial difference in child survival outcomes across regions and income levels.
+
+##2.6 Publication-quality visualization
+#a)
+p <- plot_predictions(
+  m3,
+  condition = c("income", "region")
+) +
+  labs(
+    title = "Income and Infant Mortality",
+    x = "Per-capita income (USD)",
+    y = "Predicted infant mortality (per 1,000)"
+  ) +
+  theme_minimal()
+p
+ggsave("predicted_infant_mortality_by_region.png", p, width = 8, height = 5, dpi = 300)
+
+#b)
+#The plot shows a strong negative relationship between national income and infant mortality, as countries get richer, predicted infant mortality falls. 
+#The decline is steepest at low income levels, meaning that increases in income among poorer countries are associated with especially large reductions in infant deaths. 
+#Geography also matters, even at similar income levels, regions differ in predicted infant mortality, with Africa having the highest and Europe the lowest at similar income levels.
+#Important omitted variables (e.g., education, vaccination coverage, sanitation, inequality, conflict, governance quality) may drive both income and infant mortality, biasing estimates. 
+#Reverse causality is also possible, healthier populations can contribute to higher productivity and income over time.
+
+##2.7 Diagnostics and robust inference
+#a)
+plot(m3, which = 1)
+# The plot does not suggest heteroskedasticity
+
+#b)
+modelsummary(
+  list("Level" = m1, "Log" = m2,
+       "Controls" = m3, "Interaction" = m4),
+  vcov = "robust",
+  stars = TRUE,
+  gof_map = c("r.squared", "nobs"))
+
+#c)
+modelsummary(m3,
+             stars = TRUE,
+             gof_map = c("r.squared", "nobs"))
+
+modelsummary(m3,
+             vcov = "robust",
+             stars = TRUE,
+             gof_map = c("r.squared", "nobs"))
+
