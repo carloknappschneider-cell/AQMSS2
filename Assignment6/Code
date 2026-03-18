@@ -1,0 +1,331 @@
+################################################################################
+##Author: Carlo Knappschneider
+##Course: AQMS II
+##Assignment 6
+################################################################################
+###Library
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(fixest)
+library(modelsummary)
+library(fixest)
+library(did)
+################################################################################
+
+###1 Part 1: In-Class (Card-Krueger Minimum Wage)
+
+df = read.csv("C:/Users/carlo/OneDrive/Dokumente/AQMSS2/assignment6/minwage.csv")
+
+#-------------------------------------------------------------------------------
+
+##1.1 Data setup and exploration
+
+#a)
+df = df %>% mutate(NJ = ifelse(location != "PA", 1, 0))
+table(df$NJ)
+df %>%
+  group_by(NJ) %>%
+  summarise(
+    mean_wage_before = mean(wageBefore, na.rm = TRUE),
+    mean_wage_after = mean(wageAfter, na.rm = TRUE))
+#After the policy change, the wages in NJ increased from 4.61 to 5.08, wages in 
+#PA did not move much and even decreased a bit from 4.65 to 4.61.
+
+#b)
+means = df %>%
+  group_by(NJ) %>%
+  summarise(
+    before = mean(fullBefore, na.rm = TRUE),
+    after = mean(fullAfter, na.rm = TRUE),
+    change = after - before)
+means
+
+nj_change = means$change[means$NJ == 1]
+pa_change = means$change[means$NJ == 0]
+did_est = nj_change - pa_change
+cat("DiD estimate:", round(did_est, 3), "\n")
+#The DiD describes the difference between NJ and PA. A positive DiD means that 
+#employment developed more positively in PA, which is the case with DID: 2.927.
+
+#c)
+df_long = df %>%
+  mutate(id = row_number()) %>%
+  pivot_longer(
+    cols = c(fullBefore, fullAfter),
+    names_to = "period",
+    values_to = "full_emp") %>%
+  mutate(
+    post = ifelse(period == "fullAfter", 1, 0),
+    NJ = ifelse(location != "PA", 1, 0))
+nrow(df_long)
+nrow(df)
+#The DiD regression requires long format because the interaction post × NJ is 
+#the DiD estimator: it captures how the within-NJ change in employment (post-pre) 
+#differs from the corresponding within-PA change.
+
+#-------------------------------------------------------------------------------
+
+##1.2 DiD regression
+
+#a)
+m_did = feols(full_emp ~ post * NJ, data = df_long, cluster = ~id)
+modelsummary(m_did, stars = TRUE, gof_map = c("nobs", "r.squared"),
+             output = "html")
+#The coefficient of the interaction term post x NJ is 2.927, the same as in 1.1b).
+
+#b)
+m_did_fe = feols(full_emp ~ post * NJ | chain, data = df_long, cluster = ~id)
+modelsummary(
+  list("DiD" = m_did, "DiD + Chain FE" = m_did_fe),
+  stars = TRUE, gof_map = c("nobs", "r.squared"),
+  output = "html")
+#Controlling for chain type does not change the DiD estimate. 
+# Chain FEs absorb baseline differences in staffing levels across fast-food chains 
+#but since chain type is roughly balanced across states, controlling for it has 
+#little impact on the DiD coefficient.
+
+
+#c)
+#The parallel trends assumption here requires that, absent the NJ minimum wage 
+#increase, employment trends in NJ and PA fast-food restaurants would have been 
+#the same from February to November 1992. This is plausible because both states 
+#share a similar economic environment and the two surveys were close together in 
+#time, limiting opportunities for diverging trends. A concrete violation would 
+#occur if NJ experienced an independent economic shock during this period 
+
+#-------------------------------------------------------------------------------
+
+##1.3 Wages as a validation check
+
+#a)
+df_long_wage = df %>%
+  mutate(id = row_number()) %>%
+  pivot_longer(
+    cols = c(wageBefore, wageAfter),
+    names_to = "period",
+    values_to = "wage") %>%
+  mutate(
+    post = ifelse(period == "wageAfter", 1, 0),
+    NJ = ifelse(location != "PA", 1, 0))
+m_wage = feols(wage ~ post * NJ, data = df_long_wage, cluster = ~id)
+summary(m_wage)
+#The interaction coefficient post:NJ is 0.509, which means that wages rose 
+#substantially, in NJ compared to PA after the treatment.
+
+#b)
+#The wage DiD serves as a “first stage” or manipulation check. If wages had not 
+#risen in NJ after the minimum wage increase, it would be unclear whether the 
+#study is truly estimating the effect of a minimum wage change at all.
+#The fact that wages did rise in NJ gives us confidence that the treatment actually 
+#occurred as intended, so the employment DiD can be credibly interpreted as a 
+#causal response to the minimum wage increase rather than a spurious or null comparison.
+
+
+################################################################################
+
+###2 Part 2: Take-Home (Staggered DiD with the did Package)
+
+data(mpdta)
+
+#-------------------------------------------------------------------------------
+
+##2.1 Data structure and visualization
+
+#a)
+n_distinct(mpdta$countyreal)
+#500 
+
+n_distinct(mpdta$first.treat)
+#4
+
+table(mpdta$first.treat)
+# 0:1545, 2004:100, 2006:200, 2007:655
+
+#"Staggered treatment adoption" means that counties do not all receive treatment
+#at the same time. Some counties are treated in 2004, in 2006,in 2007, and some 
+#are never treated. 
+
+#b)
+mpdta_avg <- mpdta %>%
+  mutate(
+    cohort = factor(
+      first.treat,
+      levels = c(0, 2004, 2006, 2007),
+      labels = c("Never treated", "Adopted 2004", "Adopted 2006", "Adopted 2007")
+    )
+  ) %>%
+  group_by(year, cohort) %>%
+  summarise(mean_lemp = mean(lemp, na.rm = TRUE), .groups = "drop")
+
+
+p <- ggplot(mpdta_avg, aes(x = year, y = mean_lemp, color = cohort, group = cohort)) +
+  geom_line(linewidth = 1) +
+  geom_point(size = 2) +
+  theme_minimal() +
+  labs(
+    title = "Average Log Teen Employment by Treatment Cohort",
+    x = "Year",
+    y = "Log teen employment",
+    color = "Treatment cohort"
+  )
+p
+
+ggsave(
+  filename = "mpdta_cohort_trends.png",
+  plot = p,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+#The cohorts follow similar trends before their respective treatment years. 
+#However, the level of the cohorts are different. After treatment, there is no immediate 
+#visible effect for treated cohorts relative to others. The changes are gradual and 
+#similar across cohorts.
+
+#-------------------------------------------------------------------------------
+
+##2.2 Naive TWFE vs. Callaway-Sant´anna estimator
+
+#a)
+mpdta = mpdta %>%
+  mutate(treated_post = as.integer(first.treat > 0 & year >= first.treat))
+m_twfe = feols(lemp ~ treated_post | countyreal + year,
+               data = mpdta, cluster = ~countyreal)
+summary(m_twfe)
+
+#The coefficient on treated_post is -0.0365. That means that, the treatment is associated 
+#with a decrease in 3,65% teen employment.
+
+#b)
+cs_out = att_gt(
+  yname = "lemp",
+  gname = "first.treat",
+  idname = "countyreal",
+  tname = "year",
+  xformla = ~ lpop,
+  data = mpdta,
+  control_group = "nevertreated")
+# Aggregate to an overall ATT
+aggte(cs_out, type = "simple")
+
+#The overall ATT estimate is -0.0418. This suggests that the treatment reduces teen 
+#employment by approximately 4.18% on average.
+
+#c)
+cs_dyn <- aggte(cs_out, type = "dynamic")
+p_dyn <- ggdid(cs_dyn)
+p_dyn
+
+ggsave(
+  filename = "event_study_cs.png",
+  plot = p_dyn,
+  width = 8,
+  height = 5,
+  dpi = 300
+)
+
+#The confidence intervals of the pre-treatment estimates all include zero, 
+#meaning that there are no statistically significant differences in trends before treatment. 
+#Therefore, the parallel trends assumption appears plausible.
+#The post-treatment estimates show a clear negative pattern. 
+#While the immediate effect at t = 0 is small and not statistically significant,
+#the estimates become more negative over time. Indicating that the treatment has 
+#a negative and growing impact on teen employment over time.
+
+#-------------------------------------------------------------------------------
+
+##2.3 Pre-testing the parallel trends assumption
+
+#a)
+cs_out_bt = att_gt(
+  yname = "lemp",
+  gname = "first.treat",
+  idname = "countyreal",
+  tname = "year",
+  xformla = ~ lpop,
+  data = mpdta,
+  control_group = "nevertreated",
+  bstrap = TRUE,
+  cband = TRUE)
+summary(cs_out_bt)
+
+#The p-value is 0.233.
+#The null hypothesis is; all pre-treatment effects are zero.
+#Since the p-value is relatively big, we fail to reject the null hypothesis.
+
+#b)
+ggdid(cs_out_bt)
+ggsave("mpdta_att_gt.pdf", width = 10, height = 6)
+
+#All pre-treatment ATT(g,t) estimates include 0 in their confidence interval
+
+#c)
+#Failing to reject the pre-test only indicates that we do not find evidence of 
+#differences in the pre-treatment period. The test cannot rule out violations 
+#that occur after treatment or differences that are not detected statistically.
+#Therefore, it provides no certain evidence for the parallel trends assumption.
+
+#-------------------------------------------------------------------------------
+
+##2.4 Comparing control group specifications
+
+#a)
+cs_out_nyt = att_gt(
+  yname = "lemp",
+  gname = "first.treat",
+  idname = "countyreal",
+  tname = "year",
+  xformla = ~ lpop,
+  data = mpdta,
+  control_group = "notyettreated")
+aggte(cs_out_nyt, type = "simple")
+
+#The ATT using not-yet-treated counties is -0.0414. While the ATT using 
+#never-treated counties (Section 2.2b) was -0.0418.
+#The two estimates are almost identical in both sign and magnitude.
+
+#b)
+cs_dyn_nyt = aggte(cs_out_nyt, type = "dynamic")
+ggdid(cs_dyn_nyt)
+ggsave("mpdta_event_study_nyt.pdf", width = 7, height = 4)
+
+#The results are similar to section 2.2c, the overall conclusion, the treatment
+#reduces teen employment and the effect grows with time, remains unchanged.
+
+#c)
+#Never-treated as the control group is preferable when we are concerned about 
+#anticipation effects. Not-yet-treated as the control group can improve precision 
+#by increasing the number of control observations, but rely on the assumption that 
+#future treatment does not affect current outcomes. Not-yet-treated controls are 
+#preferable when anticipation effects are unlikely.
+
+#-------------------------------------------------------------------------------
+ 
+##2.5 Discussion: why does TWFE fail in staggered settings?
+
+#a)
+#In a TWFE both unit and time fixed effect are included to estimate the treatment
+#effect. This can produce misleading results in staggered DiD settings, because 
+#treatment effect can be heterogeneous over time and units.
+#The “forbidden comparison” problem occurs in staggered DiD settings, when the 
+#TWFE model uses already-treated units for later-treated units as a control.
+#As a control group; never-treated units, not-yet-treated units, and already-treated
+#units are used. This can lead to problems if the treatment effect is heterogeneous 
+#over time and cohorts, because the control is itself affected by the treatment.
+
+
+
+#b)
+#The estimator for the TWFE is -0.0365 vs. Callaway-Santanna estimate is  -0.0418.
+#They differ only by a small margin and point into the same direction. 
+#As discussed in the last question TWFE can lead to misleading results in our case.
+#Therefore, Callaway-Santanna estimate appears to be the more credible option.
+
+
+
+
+
+
+
+
