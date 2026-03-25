@@ -258,10 +258,8 @@ conflict_map <- ggplot(world_conflict) +
     subtitle = "Number of conflict events"
   )
 
-# Show plot
 conflict_map
 
-# Save plot
 ggsave("conflict_count_map.pdf", plot = conflict_map, width = 12, height = 7)
 
 #Yes, the geographic pattern matches the event-level map from question 2.1c.
