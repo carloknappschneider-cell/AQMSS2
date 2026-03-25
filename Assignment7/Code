@@ -1,0 +1,315 @@
+################################################################################
+##Author: Carlo Knappschneider
+##Course: AQMS II
+##Assignment 7
+################################################################################
+###Library
+library(sf)
+library(spData)
+library(dplyr)
+library(modelsummary)
+library(ggplot2)
+library(tidyr)
+library(rnaturalearth)
+################################################################################
+
+###1 Part 1: In-Class (Exploring Spatial Data with sf)
+
+data(world)
+
+#-------------------------------------------------------------------------------
+
+##1.1 Inspecting an sf object
+
+#a)
+class(world)
+names(world)
+nrow(world)
+
+#A sf object different from a regular R data frame due to a column called geometry.
+#In the geometry collums all geometry types: POINT, LINESTRING, POLYGON and their
+#multi-variants are stored. 
+#sf saves all those geometry objects as vectors or matrics
+
+#b)
+st_crs(world)
+
+#The dataset uses EPSG:4326 (WGS84 — World Geodetic System 1984). 
+#It is the global standard because it provides the basis for GPS. Using a single 
+#global system allows devices and software worldwide to communicate locations 
+#using consistent Latitude and Longitude without regional offsets.
+
+#c)
+st_geometry_type(world)
+
+unique(st_geometry_type(world))
+
+#A MULTIPOLYGON is a collection of polygons treated as a single geographic feature. 
+#Countries with multiple polyglons have not one singular land mass, but have several 
+#territories, like an island or a an exclave.
+#Examples: 1. Azerbaijan with the exclave Nakhchivan Autonomous Republic.
+#2. Indonesia needs thousands of polyglons due to plenty of islands.
+
+
+#d)
+pdf("world_gdp_base.pdf")
+plot(world["gdpPercap"])
+dev.off()
+
+plot(world["gdpPercap"], main = "GDP per capita by country")
+
+#The global north and parts of the middle east appears to be richest, while 
+#countries especially in Africa and parts of Asia seem poorest. 
+
+#-------------------------------------------------------------------------------
+
+##1.2 Attribute operations
+
+#a)
+africa = filter(world, continent == "Africa")
+nrow(africa)
+
+plot(africa["gdpPercap"], main = "GDP per capita -- Africa")
+
+#No the country count is 51, but Africa has 54 recognize states. 
+
+#b)
+world = world %>%
+  mutate(pop_millions = pop / 1e6)
+gdp_by_continent = world %>%
+  group_by(continent) %>%
+  summarise(mean_gdpPercap = mean(gdpPercap, na.rm = TRUE))
+print(st_drop_geometry(gdp_by_continent))
+
+#When summarise() is called on a grouped sf object, it unions the geometries within
+#each group and retains the resulting geometry column. To obtain a plain data frame 
+#without spatial information, use st_drop_geometry() before or after the summary step. 
+#This avoids carrying unneeded geometry through purely tabular analyses.
+
+#c)
+africa_sorted = africa %>%
+  arrange(desc(gdpPercap)) %>%
+  select(name_long, gdpPercap)
+print(head(st_drop_geometry(africa_sorted), 5))
+#The 5 African countries with the highest gdp pp. are: Equatorial Guinea, Gabon,
+#Libya, Botswana, Algeria.
+
+#-------------------------------------------------------------------------------
+
+##1.3 Simple visualization with ggplot2
+
+#a)
+ggplot(world) +
+  geom_sf(aes(fill = gdpPercap)) +
+  scale_fill_viridis_c(option = "plasma", na.value = "grey80",
+                       name = "GDP per capita") +
+  theme_void() +
+  labs(title = "GDP per capita by country")
+
+#The geographic pattern is the same as in the first world map. 
+
+#b)
+ggplot(africa) +
+  geom_sf(aes(fill = gdpPercap)) +
+  scale_fill_viridis_c(option = "magma", na.value = "grey80",
+                       name = "GDP per capita") +
+  theme_void() +
+  labs(title = "GDP per capita -- Africa")
+
+ggsave("africa_gdp.pdf", width = 7, height = 6)
+
+#Parts of Sub-Saharan Africa show the lowest GDP per capita, while the northern 
+#and southern states of Africa appears to be the richest.
+
+#c)
+ggplot(africa) +
+  geom_sf(aes(fill = gdpPercap), color = "white", linewidth = 0.3) +
+  scale_fill_viridis_c(option = "magma", na.value = "grey80",
+                       name = "GDP per capita") +
+  theme_void() +
+  labs(title = "GDP per capita -- Africa (with borders)")
+  
+ggsave("africa_gdp_borders.pdf", width = 7, height = 6)
+
+#It improves readability, because small countries or countries with a similar colour
+#are easier to distinguish from each other with the white border lines added. 
+
+################################################################################
+
+###2 Part 2: Take-Home (Point Data and Spatial Joins)
+
+events <- read.csv("C:/Users/carlo/OneDrive/Dokumente/AQMSS2/Assignment7/conflict_events.csv")
+
+#-------------------------------------------------------------------------------
+
+##2.1 Converting tabular data to sf
+
+#a)
+events_sf <- st_as_sf(
+  events,
+  coords = c("longitude", "latitude"),
+  crs = 4326
+)
+
+class(events_sf)
+st_crs(events_sf)
+
+#st_as_sf() converts a regular data frame into an sf object.
+#The coords argument tells R which columns contain the geographic coordinates.
+#crs = 4326 assigns the coordinate reference system WGS84.
+
+#b)
+nrow(events_sf)
+#68354
+
+table(events_sf$event_type)
+#stat-based is the most common with 33487.
+
+#c)
+world <- ne_countries(scale = "medium", returnclass = "sf")
+
+p <- ggplot() +
+  geom_sf(data = world, fill = "grey85", color = "white", linewidth = 0.2) +
+  geom_sf(data = events_sf, aes(color = event_type), size = 1, alpha = 0.7) +
+  theme_minimal() +
+  labs(
+    title = "Conflict Events Worldwide",
+    subtitle = "Conflict events overlaid on world polygons",
+    color = "Event type"
+  )
+
+p
+
+ggsave("conflict_events_map.png", plot = p, width = 12, height = 7, dpi = 300)
+
+#The map only shows events im Africa. The events are concentrated in the middle 
+#of Africa. 
+
+#-------------------------------------------------------------------------------
+
+##2.2 Spatial join: events to countries
+
+#a)
+st_crs(events_sf)
+st_crs(world)
+
+world <- st_transform(world, st_crs(events_sf))
+
+events_joined <- st_join(events_sf, world)
+
+nrow(events_sf)
+nrow(events_joined)
+
+#Checking the CRS before joining is important because spatial coordinates only 
+#line up correctly if both data sets use the same coordinate reference system.
+
+#b)
+sum(is.na(events_joined$name_long))
+
+sum(is.na(events_joined$name_long)) / nrow(events_joined)
+#0,0231
+
+#A point might not match a polyglot, because the event is outside any country polyglots,
+#or the point lies exactly on a border.
+
+#c)
+country_summary <- events_joined %>%
+  filter(!is.na(name_long)) %>%
+  group_by(name_long) %>%
+  summarise(
+    n_events = n(),
+    total_fatalities = sum(fatalities, na.rm = TRUE)
+  ) %>%
+  arrange(desc(n_events))
+
+country_summary %>%
+  st_drop_geometry() %>%
+  slice(1:10)
+
+#Yes, the results are consistent with my knowledge on contemporary armed conflicts. 
+#In the top 10 are countries like the Democratic Republic of Congo, Somalia, or Rwanda,
+#which are unfortunately known for military conflicts. 
+
+#-------------------------------------------------------------------------------
+
+##2.3 Choropleth of conflict intensity
+
+#a)
+country_counts <- country_summary %>%
+  st_drop_geometry()
+
+world_conflict <- world %>%
+  left_join(country_counts, by = c("name_long" = "name_long")) %>%
+  mutate(
+    n_events = replace_na(n_events, 0),
+    total_fatalities = replace_na(total_fatalities, 0)
+  )
+
+nrow(world)
+nrow(world_conflict)
+
+#b)
+conflict_map <- ggplot(world_conflict) +
+  geom_sf(aes(fill = n_events), color = "white", linewidth = 0.2) +
+  scale_fill_distiller(palette = "Reds", direction = 1, name = "Events") +
+  theme_minimal() +
+  labs(
+    title = "Conflict Event Counts by Country",
+    subtitle = "Number of conflict events"
+  )
+
+# Show plot
+conflict_map
+
+# Save plot
+ggsave("conflict_count_map.pdf", plot = conflict_map, width = 12, height = 7)
+
+#Yes, the geographic pattern matches the event-level map from question 2.1c.
+
+#c)
+conflict_log_map <- ggplot(world_conflict) +
+  geom_sf(aes(fill = log1p(n_events)), color = "white", linewidth = 0.2) +
+  scale_fill_distiller(
+    palette = "YlOrRd",
+    direction = 1,
+    name = "Log(events+1)"
+  ) +
+  theme_minimal() +
+  labs(
+    title = "Log-Transformed Conflict Event Counts by Country",
+    subtitle = "Using log(events + 1)"
+  )
+
+conflict_log_map
+
+ggsave("conflict_log_map.pdf", plot = conflict_log_map, width = 12, height = 7)
+
+#The log transformation is useful because raw event counts are often highly skewed: 
+#a small number of countries have very many events, while most countries have few or none.
+#Using log reveals a broader range of countries with some conflict activity that 
+#may not stand out on the raw count map.
+
+#-------------------------------------------------------------------------------
+
+#2.5 Discussion
+
+#a)
+
+#One limitation is if the event falls exactly on the border of countries and 
+#could therefore be wrongly assigned or not assigned at all. 
+#To handle events that fall just outside a polygon due to small coordinate impressions,
+#one can use a small buffer around the polyglots to still assign these events correctly.
+
+#b)
+
+#st_join() matches observations based on spatial relationship, whether a point is inside
+#a polyglot or not. This is preferable when working with geographic data.
+#left_join() matches rows using shared attributed values, like country name.
+#This is preferable when merging datasets based on identifiers. 
+
+
+
+
+
+
+
